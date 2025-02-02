@@ -1,0 +1,363 @@
+---
+title: "Covid '19 Analysis"
+output:
+  html_document: default
+  pdf_document: default
+date: "2025-01-29"
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#### Fellow CU Boulder peers reviewing these work, scroll down to Costa Rica COVID19 Data Analysis to skip the code we already reviewed in class
+
+
+```{r import libraries, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(janitor)
+library(lubridate)
+```
+
+
+
+```{r read data}
+
+url <- "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/"
+
+global_cases <- url %>% 
+  str_c("time_series_covid19_confirmed_global.csv") %>% 
+  read_csv()
+
+global_deaths <- url %>% 
+  str_c("time_series_covid19_deaths_global.csv") %>% 
+  read_csv()
+
+us_cases <- url %>% 
+  str_c("time_series_covid19_confirmed_US.csv") %>% 
+  read_csv()
+
+us_deaths <- url %>% 
+  str_c("time_series_covid19_deaths_US.csv") %>% 
+  read_csv()
+
+```
+
+```{r tidy data}
+cols <- c('Province/State', 'Country/Region', 'Lat', 'Long')
+
+global_cases <- global_cases %>% 
+    pivot_longer(cols = -cols,
+                 names_to = "date",
+                 values_to = "cases") %>% 
+    select(-c(Lat,Long)) %>% 
+  clean_names()
+
+global_deaths <- global_deaths %>% 
+    pivot_longer(cols = -cols,
+                 names_to = "date",
+                 values_to = "deaths") %>% 
+    select(-c(Lat,Long)) %>% 
+  clean_names()
+
+```
+
+```{r Transforming Global}
+global <- global_cases %>% 
+  full_join(global_deaths) %>% 
+  mutate(date = mdy(date))
+
+global <- global %>% filter(cases > 0)
+
+summary(global)
+
+global %>% filter(cases > 28000000, country_region == "US")
+
+```
+
+```{r Transforming US Cases}
+us_cases <- us_cases %>% 
+  pivot_longer(cols = -(UID:Combined_Key),
+               names_to = "date",
+               values_to = "cases") %>% 
+  select(Admin2:cases) %>% 
+  mutate(date = mdy(date)) %>% 
+  select(-c(Lat, Long_))
+
+us_deaths <- us_deaths %>% 
+  pivot_longer(cols = -(UID:Population),
+               names_to = "date",
+               values_to = "deaths") %>% 
+  select(Admin2:deaths) %>% 
+  mutate(date = mdy(date)) %>% 
+  select(-c(Lat, Long_))
+
+us <- us_cases %>% 
+  full_join(us_deaths) %>% 
+  clean_names()
+us
+
+```
+
+```{r Adding population to global}
+global <- global %>% 
+  unite("combined_key",
+        c(province_state, country_region),
+        sep = ", ",
+        na.rm = TRUE,
+        remove = FALSE)
+
+
+uid <- str_c(
+  "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/",
+        "UID_ISO_FIPS_LookUp_Table.csv") %>% 
+  read_csv() %>% 
+  select(-c(Lat, Long_, Combined_Key, code3, iso2, iso3, Admin2)) %>% 
+  clean_names()
+
+global <- global %>% 
+  left_join(uid, by = c("province_state", "country_region")) %>% 
+  select(province_state, country_region, date, cases, deaths, 
+         population, combined_key)
+
+```
+
+```{r Visualizing Data}
+us_by_state <- us %>% 
+  group_by(province_state, country_region, date) %>% 
+  summarise(cases = sum(cases),
+            deaths = sum(deaths),
+            population = sum(population)) %>% 
+  mutate(deaths_per_mill = deaths*1000000/population) %>% 
+  ungroup()
+us_by_state
+
+us_totals <- us_by_state %>% 
+  group_by(country_region, date) %>% 
+  summarise(cases = sum(cases),
+            deaths = sum(deaths),
+            population = sum(population)) %>% 
+  mutate(deaths_per_mill = deaths*1000000/population) %>% 
+  ungroup()
+
+us_totals %>% 
+  filter(cases > 0) %>% 
+  ggplot(aes(date, cases)) +
+  geom_line(aes(color = "cases")) +
+  geom_point(aes(color = "cases")) +
+  geom_line(aes(y = deaths, color="deaths")) +
+  geom_point(aes(y = deaths, color = "deaths"))+
+  scale_y_log10()+
+  theme(legend.position = "bottom",
+        axis.text.x = element_text(angle=90))+
+  labs(title = "COVID19 in US", y=NULL)
+
+us_by_state %>% 
+  filter(province_state == "New York") %>% 
+  filter(cases > 0) %>% 
+  ggplot(aes(date, cases)) +
+  geom_line(aes(color = "cases")) +
+  geom_point(aes(color = "cases")) +
+  geom_line(aes(y = deaths, color="deaths")) +
+  geom_point(aes(y = deaths, color = "deaths"))+
+  scale_y_log10()+
+  theme(legend.position = "bottom",
+        axis.text.x = element_text(angle=90))+
+  labs(title = "COVID19 in New York", y=NULL)
+
+```
+
+```{r Analyze Data}
+us_by_state <- us_by_state %>% 
+  mutate(new_cases = cases - lag(cases),
+         new_deaths = deaths - lag(deaths))
+us_totals <- us_totals %>% 
+  mutate(new_cases = cases - lag(cases),
+         new_deaths = deaths - lag(deaths))
+
+us_totals %>% 
+  ggplot(aes(date, new_cases)) +
+  geom_line(aes(color = "new_cases")) +
+  geom_point(aes(color = "new_cases")) +
+  geom_line(aes(y = new_deaths, color="new_deaths")) +
+  geom_point(aes(y = new_deaths, color = "new_deaths"))+
+  scale_y_log10()+
+  theme(legend.position = "bottom",
+        axis.text.x = element_text(angle=90))+
+  labs(title = "COVID19 in US", y=NULL)
+
+us_state_totals <- us_by_state %>% 
+  group_by(province_state) %>% 
+  summarize(deaths = max(deaths),
+            cases = max(cases),
+            population = max(population),
+            cases_per_thou = 1000* cases/population,
+            deaths_per_thou = 1000* deaths/population) %>% 
+  filter(cases>0, population>0)
+  
+us_state_totals %>% 
+  slice_min(deaths_per_thou, n=10)
+
+us_state_totals %>% 
+  slice_max(deaths_per_thou, n=10)
+
+```
+
+```{r Modeling Data}
+mod <- lm(deaths_per_thou ~ cases_per_thou, data = us_state_totals)
+summary(mod)
+
+us_tot_w_pred <- us_state_totals %>% 
+  mutate(pred = predict(mod))
+
+us_tot_w_pred %>% 
+  ggplot() +
+  geom_point(aes(x = cases_per_thou, y = deaths_per_thou), color = "blue") +
+  geom_point(aes(x = cases_per_thou, y = pred), color = "red")
+
+```
+
+# Costa Rica COVID19 Data Analysis
+
+For this analysis, you will learn more about the COVID19 Pandemic as it develop in Costa Rica.
+
+```{r Transforming CR}
+cr <- global %>% 
+  filter(country_region == "Costa Rica") %>% 
+  mutate(new_cases = cases - lag(cases),
+         new_deaths = deaths - lag(deaths)) %>% 
+  select(-c(province_state, country_region, combined_key)) # Dropping province_state because all NAs
+
+cr_monthly <- cr %>% 
+  group_by(month = floor_date(date, unit = "month")) %>% 
+  summarize(cases = sum(cases),
+            new_cases = sum(new_cases),
+            deaths = sum(deaths),
+            new_deaths = sum(new_deaths),
+            population = max(population)) %>% 
+  ungroup()
+
+
+cr_monthly
+```
+
+## Visualizing Costa Rica during the pandemic
+
+```{r Visualizing 1}
+cr_monthly %>% 
+  ggplot(aes(x = month)) +
+  geom_line(aes(y = new_cases, color = "New Cases"), size = 1.2) +  # Line for new cases
+  geom_line(aes(y = new_deaths, color = "Deaths"), size = 1.2) +        # Line for deaths
+  scale_y_log10() +  # Log10 scale for y-axis with comma formatting
+  labs(
+    title = "Costa Rica monthly COVID-19 new cases and new deaths",
+    subtitle = "Tracking the rise and fall of new cases and new deaths over time",
+    x = "Month",
+    y = "Count (Log10 Scale)",
+    color = "Metric",  # Legend title
+    caption = "Data Source: Your Data Source Here"
+  ) +
+  scale_color_manual(values = c("New Cases" = "darkgreen", "Deaths" = "red")) +  # Custom colors
+  theme_minimal() +  # Start with a minimal theme
+  theme(
+    plot.title = element_text(size = 20, face = "bold", color = "black", hjust = 0.5),
+    plot.subtitle = element_text(size = 14, color = "gray40", hjust = 0.5),
+    plot.caption = element_text(size = 10, color = "gray40", hjust = 1),
+    axis.title = element_text(size = 14, face = "bold", color = "black"),
+    axis.text = element_text(size = 12, color = "black"),
+    panel.background = element_rect(fill = "white"),  # Light background
+    plot.background = element_rect(fill = "white"),   # Light background
+    panel.grid.major = element_line(color = "gray90"),  # Light grid lines
+    panel.grid.minor = element_blank(),  # Remove minor grid lines
+    text = element_text(color = "black"),  # Black text for contrast
+    legend.position = "bottom"  # Move legend to the bottom
+  )+
+  geom_smooth(aes(y = new_cases, color = "New Cases Trend"), 
+              method = "lm", formula = y ~ poly(x, 2), se = FALSE, linetype = "dashed") +  # Quadratic trend for cases
+  geom_smooth(aes(y = new_deaths, color = "Deaths Trend"), 
+              method = "lm", formula = y ~ poly(x, 2), se = FALSE, linetype = "dashed")   # Quadratic trend for deaths
+```
+
+The quadratic trend for the deaths seems to have a stronger curvature indicating the deaths dropped faster than the new cases and will be explored further with in the modeling part.
+
+But first, a break down analysis of the seasonal trend, to identify if their were specific months higher than others.
+
+```{r Visualizing 2}
+cr_monthly %>%
+  mutate(
+    month_num = as.factor(month(month, label = TRUE, abbr = TRUE)),  # Convert month to ordered factor
+    year = as.factor(year(month))  # Convert year to factor
+  ) %>%
+  ggplot(aes(x = month_num, y = new_deaths, color = year, group = year)) +  # Group by year
+  geom_line(size = 1.2) +  # Add lines
+  labs(
+    title = "Costa Rica monthly COVID-19 deaths by year",
+    subtitle = "Trends in new deaths over time, grouped by year",
+    x = "Month",
+    y = "New Deaths",
+    color = "Year",  # Legend title
+  ) +
+  theme_minimal() +  # Start with a minimal theme
+  theme(
+    plot.title = element_text(size = 20, face = "bold", color = "black", hjust = 0.5),
+    plot.subtitle = element_text(size = 14, color = "gray40", hjust = 0.5),
+    plot.caption = element_text(size = 10, color = "gray40", hjust = 1),
+    axis.title = element_text(size = 14, face = "bold", color = "black"),
+    axis.text = element_text(size = 12, color = "black"),
+    panel.background = element_rect(fill = "white"),  # Light background
+    plot.background = element_rect(fill = "white"),   # Light background
+    panel.grid.major = element_line(color = "gray90"),  # Light grid lines
+    panel.grid.minor = element_blank(),  # Remove minor grid lines
+    text = element_text(color = "black"),  # Black text for contrast
+    legend.position = "bottom"  # Move legend to the bottom
+  )
+```
+
+The graph shows May and September of 2021 as the deadliest months of the COVID19th pandemic in Costa Rica.
+
+## Modeling Costa Rica
+
+### Simple linear model
+
+```{r}
+cr_monthly <- cr_monthly %>%
+  mutate(days_since_start = as.numeric(month - min(month)))
+mod_lin <- lm(new_deaths ~ days_since_start, cr_monthly)
+summary(mod_lin)
+```
+
+A simple linear model of the new_deaths over time shows a weak fit, the key takeaways are:
+
+- The model explains only 8.5% of the variance in deaths (R-squared=0.085).
+
+- The negative coefficient for days_since_start (-0.21) suggests a slight decrease in deaths over time, but this effect is not statistically significant (p=0.084).
+
+Time alone, as a linear predictor, does not meaningfully explain trends in COVID-19 deaths.
+
+### Quadratic Model
+
+```{r}
+mod_quad <- lm(new_deaths ~ days_since_start + I(days_since_start^2), cr_monthly)
+summary(mod_quad)
+```
+
+By including the time variable as quadratic predictor, a strong improvement is found. They key differences are:
+
+- The model explains 42.7% of the variance (R-squared=0.427), a 5x improvement over the linear model.
+
+- Both the linear term (p=0.0007) and quadratic term (p<0.0001) are highly significant.
+
+Interpretation:
+
+- Positive linear coefficient (1.49): Deaths initially increase with time.
+
+- Negative quadratic coefficient (-0.0015): After a peak, deaths decrease over time.
+
+- The model captures a wave-like pattern (e.g., a surge followed by decline), common in pandemics like COVID-19.
+
+
+## Conclusion
+
+After modeling the data, a non-Linear trend was discovered. The quadratic term helped in capturing the true relationship between time and deaths. Further analysis and more data is needed to arrive at a strong conclusion but the wave-like pattern could reflect public health interventions (e.g., lock downs, vaccinations) impacting death rates over time.

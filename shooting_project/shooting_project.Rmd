@@ -1,0 +1,183 @@
+---
+title: "Shooting Project"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+date: "2025-01-31"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(lubridate)
+library(janitor)
+```
+
+# Importing the data
+
+```{r Importing the data}
+url <- "https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv"
+shootings_raw <- read_csv(url) %>% 
+  clean_names() # Janitor turns every column name to snake_case
+```
+
+# Describing the data
+
+```{r Describing the data}
+shootings_raw %>% glimpse()
+```
+
+### Key variables definition:
+
+-   boro: Borough where the shooting incident occurred.
+-   precinct: a district of a city or town as defined for police purposes.
+-   jurisdiction code: Jurisdiction where the shooting incident occurred. Jurisdiction codes 0(Patrol), 1(Transit) and 2(Housing) represent NYPD whilst codes 3 and more represent non NYPD jurisdictions.
+-   statistical murder flag: Shooting resulted in the victim’s death which would be counted as a murder.
+
+Note: Other variables were considered self-explanatory according to their names.
+
+# Transforming the data
+
+```{r Transforming the data}
+shootings_raw %>% count(jurisdiction_code)
+shootings_raw %>% count(loc_classfctn_desc)
+shootings_raw %>% count(location_desc, sort = TRUE)
+
+shootings <- shootings_raw %>% 
+  select(-c(loc_of_occur_desc,
+            loc_classfctn_desc,
+            lon_lat)) %>% 
+  mutate(jurisdiction_code = as_factor(jurisdiction_code),
+         jurisdiction_code = fct_recode(
+           jurisdiction_code, 
+           "Patrol" = "0", 
+           "Transit" = "1",
+           "Housing" = "2"),
+         occur_date = mdy(occur_date),
+         precinct = as_factor(precinct))
+
+shootings %>% count(jurisdiction_code)
+shootings %>% glimpse()
+```
+
+-   Dropping *loc_of_occur_desc*, *loc_classfctn_desc* because too many values were missing. Also dropped *lon_lat* because they're available separately.
+
+-   Re-coded *jurisdiction_code* based on description values.
+
+-   Corrected *occur_date* format.
+
+-   Converted precinct into factor to prevent treating it as a numeric variable.
+
+# Visualizing the data
+
+```{r Visualizing the Data 1}
+defined_sex = c("M", "F")
+
+shootings %>% 
+  filter(perp_sex %in% defined_sex,
+         vic_sex %in% defined_sex) %>% 
+  count(perp_sex, vic_sex) %>% 
+  ggplot(aes(x = perp_sex, y = n, fill = vic_sex)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  geom_text(aes(label = n), position = position_dodge(width = 0.9), vjust = -0.5, size = 4) +
+  scale_fill_manual(values = c("F" = "pink", "M" = "lightblue")) +  
+  labs(
+    title = "Shootings by Perpetrator Sex and Victim Sex",
+    x = "Perpetrator Sex",
+    y = "Number of Shootings",
+    fill = "Victim Sex"
+  ) +
+  theme_minimal() +  # Clean and minimal theme
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 16), 
+    axis.title = element_text(size = 14),  # Axis titles
+    axis.text = element_text(size = 12),   # Axis labels
+    legend.title = element_text(size = 14),  # Legend title
+    legend.text = element_text(size = 12)   # Legend labels
+  )
+```
+
+The first plot shows the dominance of male over female perpetrators, while still not clear if there is an effect of male perpetrators against female victims.
+
+```{r Visualizing the Data 2}
+shootings %>% 
+  filter(perp_sex %in% defined_sex,
+         vic_sex %in% defined_sex,
+        ) %>% 
+  mutate(month = floor_date(occur_date, "month")) %>%
+  count(perp_sex, vic_sex, month) %>% 
+  ggplot(aes(x = month, y = n, color = interaction(perp_sex, vic_sex))) +
+  geom_line(alpha=0.5) +  # Use geom_line() for a line chart
+  scale_y_log10()+
+  geom_smooth(method = "lm", se = FALSE, linetype = "dashed") +  # Add linear trend lines
+  labs(
+    title = "Monthly Shootings by Perpetrator vs Victim sex Over Time",
+    x = "Month",
+    y = "Total Number of Shootings log(n)",
+    color = "Perp-Vic Sex"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+```
+
+In the second plot, you can observe the decrease of shootings over time overall, while female against female shootings have the only positive trend of all four comparisons.
+
+```{r Visualizing the Data 3}
+shootings %>% 
+  filter(vic_sex == "F") %>% 
+  ggplot() +
+  geom_point(aes(x = longitude, y = latitude, color = statistical_murder_flag), size = 3, alpha = 0.8) +
+  scale_color_manual(values = c("TRUE" = "red", "FALSE" = "lightgray")) +
+  labs(
+    title = "Female Shooting Victims by location in New York City",
+    x = "Longitude",
+    y = "Latitude",
+    color = "Is Murder?"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 16),
+    axis.title = element_text(size = 14),
+    axis.text = element_text(size = 12),
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 12)
+  )
+
+```
+
+Finally, you can look at a map of the shootings filtered by Female victims. Where there is no clear safe zone of less murders occuring due to the red dots being distributed across all the map.
+
+# Modeling the data
+
+A model is provided below to further analyze the effect of sex over the number of shootings over time.
+
+```{r}
+mod_data <- shootings %>% 
+  filter(perp_sex %in% defined_sex,
+         vic_sex %in% defined_sex,
+        ) %>% 
+  mutate(month = floor_date(occur_date, "month")) %>%
+  mutate(month_num = as.numeric(month - min(month)) / 30.44) %>%   # Months since start
+  count(perp_sex, vic_sex, month_num)
+mod <- lm(data = mod_data, n ~ month_num + perp_sex * vic_sex)
+summary(mod)
+```
+
+## Key Model takeways
+
+Time Trend: Shootings decrease by \~0.087 per month (p\<0.001), suggesting a small but significant downward trend.
+
+Sex Effects:
+
+Male Perpetrators: Associated with significantly higher shootings when targeting female victims (baseline).
+
+Male Victims: No significant effect when perpetrators are female (p=0.87).
+
+Interaction: Male perpetrators targeting male victims drive a massive increase in shootings (58.10/month), indicating a strong synergistic effect.
+
+Baseline: Female perpetrators targeting female victims are associated with \~11 shootings/month.
+
+# Conclusion
+
+With a quick glimpse of the data, you can identify males as a clear participant of New York City shootings. Since this could be a source of bias, models were interpreted to spotlight the effect of female perpetrators and victims. There was not a clear effect of these female participants increasing the count of shootings around New York through the analysis.
